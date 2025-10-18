@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Szybka Nauka</title>
+    
+    <!-- Dołączony Tailwind CSS z CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Dołączone czcionki Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Dodany styl dla czcionki -->
+    <style>
+      body {
+        font-family: 'Poppins', sans-serif;
+      }
+    </style>
+    
+    <!-- Dołączenie bibliotek React i ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    
+    <!-- Dołączenie Babel - narzędzia do tłumaczenia JSX w przeglądarce -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-900">
+    <div id="root"></div>
+
+    <!-- Twój kod React/TypeScript umieszczony w jednym miejscu i oznaczony jako "text/babel" -->
+    <script type="text/babel">
+        // --- Zawartość z types.ts ---
+        const GameState = {
+            SETUP: 0,
+            MODE_SELECTION: 1,
+            PLAYING: 2,
+            FINISHED: 3,
+        };
+        const GameMode = {
+            ORIGINAL_TO_TRANSLATION: 0,
+            TRANSLATION_TO_ORIGINAL: 1,
+        };
+        const FeedbackType = {
+            NONE: 0,
+            CORRECT: 1,
+            CLOSE: 2,
+            WRONG: 3,
+        };
+
+        // --- Zawartość z components/Card.tsx ---
+        const Card = ({ children, className = '' }) => {
+          return (
+            <div className={`bg-gray-800/50 backdrop-blur-sm p-8 rounded-2xl shadow-2xl shadow-violet-900/10 w-full max-w-2xl border border-gray-700 ${className}`}>
+              {children}
+            </div>
+          );
+        };
+
+        // --- Zawartość z components/Button.tsx ---
+        const Button = ({ children, variant = 'primary', className, ...props }) => {
+          const baseClasses = "font-bold py-3 px-6 rounded-xl transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105";
+          
+          const variantClasses = {
+            primary: 'bg-violet-600 hover:bg-violet-700 text-white shadow-lg hover:shadow-violet-700/50 focus:ring-violet-500',
+            secondary: 'bg-gray-700 hover:bg-gray-600 text-gray-200 shadow-md hover:shadow-gray-600/50 focus:ring-gray-500',
+          };
+
+          return (
+            <button className={`${baseClasses} ${variantClasses[variant]} ${className || ''}`} {...props}>
+              {children}
+            </button>
+          );
+        };
+
+        // --- Zawartość z App.tsx ---
+        const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+        const calculateLevenshteinDistance = (a, b) => {
+            if (a.length === 0) return b.length;
+            if (b.length === 0) return a.length;
+
+            const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+
+            for (let i = 0; i <= a.length; i++) {
+                matrix[0][i] = i;
+            }
+
+            for (let j = 0; j <= b.length; j++) {
+                matrix[j][0] = j;
+            }
+
+            for (let j = 1; j <= b.length; j++) {
+                for (let i = 1; i <= a.length; i++) {
+                    const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+                    matrix[j][i] = Math.min(
+                        matrix[j][i - 1] + 1,
+                        matrix[j - 1][i] + 1,
+                        matrix[j - 1][i - 1] + substitutionCost
+                    );
+                }
+            }
+
+            return matrix[b.length][a.length];
+        };
+
+        const calculateSimilarity = (a, b) => {
+            const distance = calculateLevenshteinDistance(a.toLowerCase().trim(), b.toLowerCase().trim());
+            const maxLength = Math.max(a.length, b.length);
+            if (maxLength === 0) return 100;
+            const similarity = (1 - distance / maxLength) * 100;
+            return Math.max(0, similarity);
+        };
+
+        const App = () => {
+            const [gameState, setGameState] = useState(GameState.SETUP);
+            const [wordListInput, setWordListInput] = useState('');
+            const [wordPairs, setWordPairs] = useState([]);
+            const [gameMode, setGameMode] = useState(null);
+            const [shuffledWords, setShuffledWords] = useState([]);
+            const [currentWordIndex, setCurrentWordIndex] = useState(0);
+            const [userAnswer, setUserAnswer] = useState('');
+            const [feedback, setFeedback] = useState({ type: FeedbackType.NONE, message: '' });
+            const [isChecking, setIsChecking] = useState(false);
+            const [results, setResults] = useState([]);
+            const [hint, setHint] = useState('');
+            
+            const hintTimeoutRef = useRef(null);
+            const hintIntervalRef = useRef(null);
+
+            const handleStart = () => {
+                const pairs = wordListInput
+                    .split('\n')
+                    .map(line => line.trim())
+                    .filter(line => !line.startsWith('='))
+                    .map(line => {
+                        const separatorIndex = line.search(/[-–—]/);
+                        if (separatorIndex === -1) {
+                            return null;
+                        }
+                        
+                        const original = line.substring(0, separatorIndex).trim();
+                        const translation = line.substring(separatorIndex + 1).trim();
+
+                        if (original && translation) {
+                            return { original, translation };
+                        }
+                        
+                        return null;
+                    })
+                    .filter((p) => p !== null);
+
+                if (pairs.length > 0) {
+                    setWordPairs(pairs);
+                    setGameState(GameState.MODE_SELECTION);
+                } else {
+                    alert('Proszę wprowadzić słówka w poprawnym formacie (np. cat-kot).');
+                }
+            };
+
+            const handleModeSelect = (mode) => {
+                setGameMode(mode);
+                const shuffled = [...wordPairs];
+                for (let i = shuffled.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                }
+                setShuffledWords(shuffled);
+                setCurrentWordIndex(0);
+                setGameState(GameState.PLAYING);
+            };
+
+            const handleCheckAnswer = () => {
+                if (!userAnswer.trim()) return;
+
+                setIsChecking(true);
+                const currentWord = shuffledWords[currentWordIndex];
+                const question = gameMode === GameMode.ORIGINAL_TO_TRANSLATION ? currentWord.original : currentWord.translation;
+                const correctAnswer = gameMode === GameMode.ORIGINAL_TO_TRANSLATION ? currentWord.translation : currentWord.original;
+                
+                const similarity = calculateSimilarity(userAnswer, correctAnswer);
+
+                const newResult = {
+                    question,
+                    userAnswer: userAnswer.trim(),
+                    correctAnswer,
+                    similarity,
+                };
+                setResults(prev => [...prev, newResult]);
+
+                let newFeedback;
+                if (similarity === 100) {
+                    newFeedback = { type: FeedbackType.CORRECT, message: `Dobrze ✅` };
+                } else if (similarity >= 60) {
+                    newFeedback = { type: FeedbackType.CLOSE, message: `Prawie 😅 (Poprawnie: ${correctAnswer})` };
+                } else {
+                    newFeedback = { type: FeedbackType.WRONG, message: `Popraw! ❌ (Poprawnie: ${correctAnswer})` };
+                }
+                setFeedback(newFeedback);
+
+                setTimeout(() => {
+                    if (currentWordIndex < shuffledWords.length - 1) {
+                        setCurrentWordIndex(prev => prev + 1);
+                    } else {
+                        setGameState(GameState.FINISHED);
+                    }
+                    setUserAnswer('');
+                    setFeedback({ type: FeedbackType.NONE, message: '' });
+                    setIsChecking(false);
+                }, 2000);
+            };
+            
+            const clearHintTimers = useCallback(() => {
+                if (hintTimeoutRef.current) {
+                    clearTimeout(hintTimeoutRef.current);
+                    hintTimeoutRef.current = null;
+                }
+                if (hintIntervalRef.current) {
+                    clearInterval(hintIntervalRef.current);
+                    hintIntervalRef.current = null;
+                }
+            }, []);
+
+            const handleRestart = () => {
+                clearHintTimers();
+                setHint('');
+                setGameState(GameState.SETUP);
+                setWordListInput('');
+                setWordPairs([]);
+                setGameMode(null);
+                setShuffledWords([]);
+                setCurrentWordIndex(0);
+                setUserAnswer('');
+                setFeedback({ type: FeedbackType.NONE, message: '' });
+                setResults([]);
+            };
+
+            const handleRetry = () => {
+                clearHintTimers();
+                setHint('');
+                setGameState(GameState.MODE_SELECTION);
+                setGameMode(null);
+                setShuffledWords([]);
+                setCurrentWordIndex(0);
+                setUserAnswer('');
+                setFeedback({ type: FeedbackType.NONE, message: '' });
+                setResults([]);
+            };
+
+            const currentQuestion = useMemo(() => {
+                if (gameState !== GameState.PLAYING || shuffledWords.length === 0) return '';
+                const currentWord = shuffledWords[currentWordIndex];
+                return gameMode === GameMode.ORIGINAL_TO_TRANSLATION ? currentWord.original : currentWord.translation;
+            }, [gameState, gameMode, shuffledWords, currentWordIndex]);
+            
+            const correctAnswerForHint = useMemo(() => {
+                if (gameState !== GameState.PLAYING || shuffledWords.length === 0) return '';
+                const currentWord = shuffledWords[currentWordIndex];
+                return gameMode === GameMode.ORIGINAL_TO_TRANSLATION ? currentWord.translation : currentWord.original;
+            }, [gameState, gameMode, shuffledWords, currentWordIndex]);
+
+            useEffect(() => {
+                setHint('');
+                clearHintTimers();
+
+                if (gameState === GameState.PLAYING && userAnswer === '' && correctAnswerForHint) {
+                    hintTimeoutRef.current = window.setTimeout(() => {
+                        let currentHintLength = 1;
+                        setHint(correctAnswerForHint.substring(0, currentHintLength));
+
+                        hintIntervalRef.current = window.setInterval(() => {
+                            currentHintLength++;
+                            if (currentHintLength > correctAnswerForHint.length) {
+                                if (hintIntervalRef.current) clearInterval(hintIntervalRef.current);
+                            } else {
+                                setHint(correctAnswerForHint.substring(0, currentHintLength));
+                            }
+                        }, 3000);
+
+                    }, 3000);
+                }
+
+                return () => {
+                    clearHintTimers();
+                };
+            }, [userAnswer, currentWordIndex, gameState, correctAnswerForHint, clearHintTimers]);
+
+            const getFeedbackColor = useCallback(() => {
+                switch (feedback.type) {
+                    case FeedbackType.CORRECT: return 'text-green-400';
+                    case FeedbackType.CLOSE: return 'text-yellow-400';
+                    case FeedbackType.WRONG: return 'text-red-400';
+                    default: return 'text-transparent';
+                }
+            }, [feedback.type]);
+            
+            const renderContent = () => {
+                switch (gameState) {
+                    case GameState.SETUP:
+                        return (
+                            <div className="text-center flex flex-col gap-6">
+                                <h2 className="text-2xl font-semibold text-gray-200">Wklej listę słówek</h2>
+                                <p className="text-gray-400">Użyj formatu: wyraz1-wyraz2, każde w nowej linii.</p>
+                                <textarea
+                                    value={wordListInput}
+                                    onChange={(e) => setWordListInput(e.target.value)}
+                                    rows={8}
+                                    className="bg-gray-900/50 border border-gray-700 rounded-xl p-4 text-gray-200 w-full focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-shadow"
+                                    placeholder={"Przykłady:\ncat-kot\nHCL-kwas siarkowodorowy\ndie Tabletten - tabletki\nKomputer-to elektroniczne urządzenie służące do automatycznego przetwarzania informacji (danych) zgodnie z określonymi instrukcjami, które zapisano w programie."}
+                                />
+                                <Button onClick={handleStart} disabled={!wordListInput.trim()}>
+                                    Rozpocznij naukę
+                                </Button>
+                            </div>
+                        );
+                    case GameState.MODE_SELECTION:
+                        return (
+                            <div className="text-center flex flex-col gap-6">
+                                <h2 className="text-2xl font-semibold text-gray-200">Wybierz tryb nauki</h2>
+                                <p className="text-gray-400">Jak chcesz odpowiadać?</p>
+                                <div className="flex flex-col md:flex-row gap-4 justify-center">
+                                    <Button onClick={() => handleModeSelect(GameMode.ORIGINAL_TO_TRANSLATION)}>
+                                        Z {wordPairs[0]?.original} na {wordPairs[0]?.translation}
+                                    </Button>
+                                    <Button onClick={() => handleModeSelect(GameMode.TRANSLATION_TO_ORIGINAL)} variant="secondary">
+                                        Z {wordPairs[0]?.translation} na {wordPairs[0]?.original}
+                                    </Button>
+                                </div>
+                            </div>
+                        );
+                    case GameState.PLAYING:
+                        return (
+                             <div className="text-center flex flex-col gap-6 w-full">
+                                <div className="text-gray-400">Słówko {currentWordIndex + 1} z {shuffledWords.length}</div>
+                                <p className="text-4xl md:text-5xl font-bold text-violet-400 bg-gray-900/50 py-6 px-4 rounded-xl">{currentQuestion}</p>
+                                <form onSubmit={(e) => { e.preventDefault(); handleCheckAnswer(); }} className="flex flex-col gap-4">
+                                    <input
+                                        type="text"
+                                        value={userAnswer}
+                                        onChange={(e) => setUserAnswer(e.target.value)}
+                                        disabled={isChecking}
+                                        autoFocus
+                                        className="bg-gray-900/50 border border-gray-700 rounded-xl p-4 text-gray-200 text-center text-xl w-full focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-shadow"
+                                        placeholder={hint || "Wpisz odpowiedź..."}
+                                    />
+                                    <Button type="submit" disabled={isChecking || !userAnswer.trim()}>
+                                        {isChecking ? 'Sprawdzam...' : 'Gotowe'}
+                                    </Button>
+                                </form>
+                                <div className="h-8 mt-2">
+                                   {feedback.message && <p className={`text-xl font-semibold transition-opacity duration-300 ${getFeedbackColor()}`}>{feedback.message}</p>}
+                                </div>
+                            </div>
+                        );
+                    case GameState.FINISHED:
+                        const correctAnswersCount = results.filter(r => r.similarity === 100).length;
+                        const totalQuestions = results.length;
+                        const finalScorePercentage = totalQuestions > 0 ? Math.round((correctAnswersCount / totalQuestions) * 100) : 0;
+                        
+                        const getStatus = (similarity) => {
+                            if (similarity === 100) return { text: 'Dobrze', color: 'text-green-400' };
+                            if (similarity >= 60) return { text: 'Prawie', color: 'text-yellow-400' };
+                            return { text: 'Popraw', color: 'text-red-400' };
+                        };
+
+                        return (
+                            <div className="text-center flex flex-col gap-4 w-full">
+                                <h2 className="text-3xl font-bold text-violet-400">Podsumowanie wyników</h2>
+                                <div className="text-xl text-gray-300 mb-2">
+                                    <p>Wynik końcowy: {correctAnswersCount}/{totalQuestions} poprawnych odpowiedzi ({finalScorePercentage}%)</p>
+                                </div>
+
+                                <div className="w-full max-h-72 overflow-y-auto bg-gray-900/50 p-2 sm:p-4 rounded-xl border border-gray-700 space-y-2 text-left">
+                                    {results.map((result, index) => {
+                                        const status = getStatus(result.similarity);
+                                        return (
+                                            <div key={index} className="bg-gray-800/70 p-3 rounded-lg grid grid-cols-3 items-center gap-2 sm:gap-4 text-sm sm:text-base">
+                                                <span className="font-semibold text-gray-200 truncate col-span-1">{result.question}</span>
+                                                <span className="text-center font-mono text-gray-400">{Math.round(result.similarity)}%</span>
+                                                <span className={`font-bold text-right ${status.color}`}>{status.text}</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                                
+                                <div className="flex flex-col gap-4 mt-2">
+                                    <Button onClick={handleRestart}>
+                                        Nowa sesja
+                                    </Button>
+                                    <Button onClick={handleRetry} variant="secondary">
+                                        Spróbuj ponownie
+                                    </Button>
+                                </div>
+                            </div>
+                        );
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col items-center justify-between p-4 sm:p-6 md:p-8 font-sans">
+                    <header className="text-center w-full mb-8 pt-4">
+                        <h1 className="text-5xl md:text-6xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-blue-400 py-2">
+                            Szybka Nauka
+                        </h1>
+                        <p className="text-gray-400 mt-2 text-lg">Wirtualny Team Technology</p>
+                    </header>
+
+                    <main className="w-full flex-grow flex items-center justify-center">
+                        <Card>
+                            {renderContent()}
+                        </Card>
+                    </main>
+
+                    <footer className="text-center w-full mt-8 text-gray-500">
+                        <p>© Wszelkie prawa zastrzeżone</p>
+                        <p>Stworzono przez pawelgaweltv</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        // --- Zawartość z index.tsx ---
+        const rootElement = document.getElementById('root');
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(
+          <React.StrictMode>
+            <App />
+          </React.StrictMode>
+        );
+
+    </script>
+</body>
+</html>
